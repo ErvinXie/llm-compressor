@@ -1,0 +1,38 @@
+# AWQ Smoothing Configuration for Qwen3-30B-A3B MoE Model
+#
+# This recipe applies AWQ smoothing without quantization for GGUF conversion
+#
+# Model: Qwen3-30B-A3B (128 experts, 8 active per token)
+# Input size: ~189GB (bfloat16)
+# Output size: ~60GB (fp16)
+#
+# Usage:
+#   python -m llmcompressor.transformers.apply \
+#       --model /mnt/data/models/Qwen3-30B-A3B-250425 \
+#       --dataset HuggingFaceH4/ultrachat_200k \
+#       --recipe qwen3_30b_a3b_config.yaml \
+#       --output_dir Qwen3-30B-A3B-awq-smoothed-fp16 \
+#       --num_calibration_samples 256 \
+#       --max_seq_length 2048
+
+quant_stage:
+  quant_modifiers:
+    AWQModifier:
+      # Apply smoothing without quantization
+      smoothing_only: true
+
+      # Skip lm_head (common practice)
+      ignore: ["lm_head"]
+
+      # Use duo scaling (recommended)
+      duo_scaling: true
+
+      # Optional: Uncomment if you have OOM issues
+      # offload_device: "cpu"
+
+      # Note: Qwen3MoeForCausalLM mappings are automatically detected
+      # The following MoE-specific mappings are applied:
+      # 1. input_layernorm -> [q_proj, k_proj, v_proj]
+      # 2. v_proj -> o_proj
+      # 3. post_attention_layernorm -> [mlp.experts.*.gate_proj, mlp.experts.*.up_proj]
+      # 4. up_proj -> down_proj
