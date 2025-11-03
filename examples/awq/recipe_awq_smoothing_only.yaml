@@ -1,0 +1,40 @@
+# AWQ Smoothing-Only Recipe
+#
+# This recipe applies AWQ's activation-aware weight smoothing without quantization.
+# The resulting FP16 model can be converted to GGUF Q4K or other formats.
+#
+# Use case: You want AWQ's optimization but plan to use llama.cpp's Q4K quantization
+#
+# Usage:
+#   python -m llmcompressor.transformers.apply \
+#       --model meta-llama/Meta-Llama-3-8B-Instruct \
+#       --dataset HuggingFaceH4/ultrachat_200k \
+#       --recipe recipe_awq_smoothing_only.yaml \
+#       --output_dir model-awq-smoothed-fp16 \
+#       --num_calibration_samples 256 \
+#       --max_seq_length 512
+#
+# Then convert to GGUF:
+#   python convert-hf-to-gguf.py model-awq-smoothed-fp16 --outtype q4_k_m
+
+quant_stage:
+  quant_modifiers:
+    AWQModifier:
+      # Enable smoothing-only mode: weights will be smoothed but not quantized
+      smoothing_only: true
+
+      # Ignore lm_head (common practice to keep output layer unmodified)
+      ignore: ["lm_head"]
+
+      # Optional: Use duo scaling (recommended, uses both activations and weights)
+      duo_scaling: true
+
+      # Optional: For memory-constrained systems, offload to CPU
+      # offload_device: "cpu"
+
+      # Note: When smoothing_only=true, you don't need to specify:
+      # - config_groups (no quantization config needed)
+      # - targets (all Linear layers are smoothed by default)
+      # - scheme (no quantization scheme needed)
+      #
+      # A default group_size of 128 is used for smoothing calculations

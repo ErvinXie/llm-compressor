@@ -112,6 +112,11 @@ class AWQModifier(Modifier, QuantizationMixin):
         to torch.device("cpu") if you are encountering OOM errors
     :param duo_scaling: whether to use duo scaling, which uses both input activations
         and weights to determine the scaling factor
+    :param smoothing_only: if True, only apply AWQ weight smoothing without quantization.
+        This is useful for exporting AWQ-optimized FP16 models for conversion to other
+        quantization formats (e.g., GGUF Q4K). When True, the model weights will be
+        optimized using activation-aware smoothing, but will remain in FP16 format.
+        Defaults to False.
     """
 
     # Allow arbitrary types because AWQMapping has fields of type torch.nn.Module
@@ -122,6 +127,7 @@ class AWQModifier(Modifier, QuantizationMixin):
     mappings: Optional[List[AWQMapping]] = None
     offload_device: Optional[torch.device] = None
     duo_scaling: bool = True
+    smoothing_only: bool = False  # If True, only apply AWQ smoothing without quantization
 
     # Private vars set during validation
     _num_bits: Optional[int] = PrivateAttr(default=None)
@@ -147,7 +153,22 @@ class AWQModifier(Modifier, QuantizationMixin):
         Confirm only one configuration for group_size, symmetric, and num_bits,
         as AWQ algorithm depends on it
         Confirm no activation quantization, as AWQ only works with WNA16
+
+        If smoothing_only is True, skip quantization config validation and use
+        default group_size for smoothing calculations.
         """
+        if model.smoothing_only:
+            # Set default group_size for smoothing calculations
+            # This value is used in _apply_smoothing for weight normalization
+            model._group_size = 128  # default group size for AWQ smoothing
+            model._num_bits = None
+            model._symmetric = None
+            logger.info(
+                "AWQ smoothing_only mode enabled: weights will be smoothed but not "
+                "quantized. The model will remain in FP16 format."
+            )
+            return model
+
         config = model.resolve_quantization_config()
 
         num_bits_set = set(
@@ -217,7 +238,8 @@ class AWQModifier(Modifier, QuantizationMixin):
         """
 
         # apply config to model and prepare calibration hooks
-        if QuantizationMixin.has_config(self):
+        # Skip quantization initialization if smoothing_only mode is enabled
+        if not self.smoothing_only and QuantizationMixin.has_config(self):
             QuantizationMixin.initialize_quantization(self, state.model)
 
         if self.mappings is None:
@@ -235,12 +257,14 @@ class AWQModifier(Modifier, QuantizationMixin):
 
         # register quantization calibration hooks
         # assume quantization has been initialized by this modifier or one before it
-        QuantizationMixin.start_calibration(self, state.model)
-        # AWQ performs forward passes during _apply_smoothing
-        # before any scales or zero points are updated
-        # Quantization must be disabled, otherwise NaNs will
-        # appear in quantized forward method
-        state.model.apply(disable_quantization)
+        # Skip quantization calibration if smoothing_only mode is enabled
+        if not self.smoothing_only:
+            QuantizationMixin.start_calibration(self, state.model)
+            # AWQ performs forward passes during _apply_smoothing
+            # before any scales or zero points are updated
+            # Quantization must be disabled, otherwise NaNs will
+            # appear in quantized forward method
+            state.model.apply(disable_quantization)
 
         self._setup_activation_cache_hooks()
 
@@ -264,18 +288,28 @@ class AWQModifier(Modifier, QuantizationMixin):
         """
         Finish calibrating by setting scales and zero-points,
          removing observers and calibration hooks
+
+        If smoothing_only mode is enabled, skip quantization parameter
+        calculation and leave weights in FP16 format.
         """
         self._assert_all_activations_consumed()
 
         self.ended_ = True
 
-        for _, module in tqdm(
-            match_named_modules(state.model, self.resolved_targets, self.ignore),
-            desc="Calibrating weights",
-        ):
-            update_weight_zp_scale(module)
+        if not self.smoothing_only:
+            # Only apply quantization if not in smoothing_only mode
+            for _, module in tqdm(
+                match_named_modules(state.model, self.resolved_targets, self.ignore),
+                desc="Calibrating weights",
+            ):
+                update_weight_zp_scale(module)
 
-        QuantizationMixin.end_calibration(self, state.model)
+            QuantizationMixin.end_calibration(self, state.model)
+        else:
+            logger.info(
+                "AWQ smoothing completed. Model weights have been optimized but "
+                "remain in FP16 format (no quantization applied)."
+            )
 
         # remove activation hooks
         self.remove_hooks()

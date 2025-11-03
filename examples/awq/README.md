@@ -43,3 +43,26 @@ In order to target weight and activation scaling locations within the model, the
 ```
 
 To support other model families, you can add supply your own mappings via the `mappings` argument with instantiating the `AWQModifier`, or you can add them to the registry [here](/src/llmcompressor/modifiers/awq/mappings.py) (contributions are welcome!)
+
+## AWQ Smoothing for GGUF Conversion ##
+
+AWQ can also be used in "smoothing-only" mode, which applies the activation-aware weight optimization without quantization. This is useful for converting models to GGUF Q4K format using llama.cpp.
+
+```python
+recipe = [
+    AWQModifier(
+        smoothing_only=True,  # Apply smoothing without quantization
+        ignore=["lm_head"],
+    ),
+]
+
+oneshot(model=model, dataset=dataset, recipe=recipe)
+model.save_pretrained("model-awq-smoothed-fp16")  # Save as FP16
+```
+
+The resulting FP16 model can then be converted to GGUF Q4K using llama.cpp's conversion tools. This approach combines AWQ's superior weight optimization with llama.cpp's efficient quantization format.
+
+For detailed instructions, see:
+- [README_GGUF.md](./README_GGUF.md) - Complete guide for GGUF conversion
+- [awq_smoothing_for_gguf_example.py](./awq_smoothing_for_gguf_example.py) - Working example
+- [recipe_awq_smoothing_only.yaml](./recipe_awq_smoothing_only.yaml) - YAML recipe
