@@ -49,6 +49,9 @@ class CalibrationQwen3MoeSparseMoeBlock(MoECalibrationModule):
         self.gate = original.gate
         self.experts = original.experts
 
+        # Store original module for restore()
+        self._original = original
+
     def forward(self, hidden_states: torch.Tensor):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
@@ -97,6 +100,15 @@ class CalibrationQwen3MoeSparseMoeBlock(MoECalibrationModule):
             batch_size, sequence_length, hidden_dim
         )
         return final_hidden_states, router_logits
+
+    def restore(self) -> OriginalQwen3MoeSparseMoeBlock:
+        """
+        Restore the original Qwen3MoeSparseMoeBlock module.
+
+        Returns:
+            The original module that was replaced
+        """
+        return self._original
 
 
 # Legacy function for backward compatibility

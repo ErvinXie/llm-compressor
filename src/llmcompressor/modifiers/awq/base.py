@@ -158,14 +158,16 @@ class AWQModifier(Modifier, QuantizationMixin):
         default group_size for smoothing calculations.
         """
         if model.smoothing_only:
-            # Set default group_size for smoothing calculations
-            # This value is used in _apply_smoothing for weight normalization
+            # Set default parameters for smoothing calculations
+            # These values are used in _apply_smoothing for computing optimal scales
+            # via pseudo-quantization, but actual quantization is not applied
             model._group_size = 128  # default group size for AWQ smoothing
-            model._num_bits = None
-            model._symmetric = None
+            model._num_bits = 4      # default bit width for scale calculation
+            model._symmetric = False # default to asymmetric for scale calculation
             logger.info(
                 "AWQ smoothing_only mode enabled: weights will be smoothed but not "
-                "quantized. The model will remain in FP16 format."
+                "quantized. The model will remain in FP16 format. Using default "
+                "parameters (num_bits=4, group_size=128) for scale computation."
             )
             return model
 
