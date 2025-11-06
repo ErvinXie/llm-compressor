@@ -1,0 +1,37 @@
+# AWQ Smooth-Only Recipe for Qwen3 30B A3B MoE Model
+# This recipe applies AWQ smoothing without quantization,
+# keeping model weights in bf16 precision
+
+# This is a one-shot recipe for applying AWQ smoothing without quantization
+# The model weights will be adjusted but remain in original precision (bf16)
+one_shot_stage:
+  quant_modifiers:
+    AWQModifier:
+      # Enable smooth_only mode to skip quantization
+      smooth_only: true
+
+      # Mappings will be automatically inferred for Qwen3MoeForCausalLM
+      # Using the _moe_default_mappings defined in mappings.py:
+      # - input_layernorm -> q_proj, k_proj, v_proj
+      # - v_proj -> o_proj
+      # - post_attention_layernorm -> mlp.experts.*.gate_proj, mlp.experts.*.up_proj
+      # - up_proj -> down_proj
+
+      # Layers to ignore (typically output heads)
+      ignore:
+        - lm_head
+
+      # Use duo scaling (default: true)
+      # This uses both activations and weights for scale computation
+      duo_scaling: true
+
+      # Optional: offload cached activations to CPU to save memory
+      # Uncomment if you encounter OOM errors
+      # offload_device: "cpu"
+
+      # Sequential targets for processing model in chunks
+      # Useful for large models that don't fit in memory
+      # sequential_targets:
+      #   - "re:model.layers.0"
+      #   - "re:model.layers.1"
+      #   # ... add more layer groups as needed

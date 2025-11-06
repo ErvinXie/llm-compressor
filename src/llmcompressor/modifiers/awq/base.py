@@ -112,6 +112,10 @@ class AWQModifier(Modifier, QuantizationMixin):
         to torch.device("cpu") if you are encountering OOM errors
     :param duo_scaling: whether to use duo scaling, which uses both input activations
         and weights to determine the scaling factor
+    :param smooth_only: if True, only apply the smoothing operation without quantization.
+        The model weights will be adjusted but remain in their original precision (e.g., bf16).
+        This is useful for analyzing the effect of smoothing independently or for custom
+        quantization workflows. Defaults to False.
     """
 
     # Allow arbitrary types because AWQMapping has fields of type torch.nn.Module
@@ -122,6 +126,7 @@ class AWQModifier(Modifier, QuantizationMixin):
     mappings: Optional[List[AWQMapping]] = None
     offload_device: Optional[torch.device] = None
     duo_scaling: bool = True
+    smooth_only: bool = False
 
     # Private vars set during validation
     _num_bits: Optional[int] = PrivateAttr(default=None)
@@ -147,7 +152,22 @@ class AWQModifier(Modifier, QuantizationMixin):
         Confirm only one configuration for group_size, symmetric, and num_bits,
         as AWQ algorithm depends on it
         Confirm no activation quantization, as AWQ only works with WNA16
+
+        In smooth_only mode, these validations are skipped because no quantization
+        will be performed.
         """
+        # Skip quantization config validation if:
+        # 1. smooth_only mode is enabled, OR
+        # 2. no quantization config is provided
+        if model.smooth_only or not QuantizationMixin.has_config(model):
+            # Set default values for private attributes (used in _compute_best_scale)
+            # These are only needed if _pseudo_quantize_tensor is called during smoothing
+            model._num_bits = 4  # default for AWQ
+            model._symmetric = False  # default for AWQ
+            model._group_size = 128  # default for AWQ
+            return model
+
+        # Normal mode with quantization config: validate configuration
         config = model.resolve_quantization_config()
 
         num_bits_set = set(
@@ -215,7 +235,8 @@ class AWQModifier(Modifier, QuantizationMixin):
         """
 
         # apply config to model and prepare calibration hooks
-        if QuantizationMixin.has_config(self):
+        # Skip quantization initialization in smooth_only mode
+        if not self.smooth_only and QuantizationMixin.has_config(self):
             QuantizationMixin.initialize_quantization(self, state.model)
 
         if self.mappings is None:
@@ -231,15 +252,22 @@ class AWQModifier(Modifier, QuantizationMixin):
     def on_start(self, state: State, event: Event, **kwargs):
         self.started_ = True
 
-        # register quantization calibration hooks
-        # assume quantization has been initialized by this modifier or one before it
-        QuantizationMixin.start_calibration(self, state.model)
-        # AWQ performs forward passes during _apply_smoothing
-        # before any scales or zero points are updated
-        # Quantization must be disabled, otherwise NaNs will
-        # appear in quantized forward method
-        state.model.apply(disable_quantization)
+        # Register quantization calibration hooks and observers
+        # In smooth_only mode, we skip this because:
+        #   - We don't need quantization observers (no quantization will be performed)
+        #   - We only need AWQ's activation cache hooks (set up below)
+        if not self.smooth_only:
+            QuantizationMixin.start_calibration(self, state.model)
+            # AWQ performs forward passes during _apply_smoothing
+            # before any scales or zero points are updated
+            # Quantization must be disabled, otherwise NaNs will
+            # appear in quantized forward method
+            state.model.apply(disable_quantization)
 
+        # Setup AWQ-specific activation cache hooks
+        # These are needed in both normal and smooth_only modes to:
+        #   - Cache input activations for computing smooth scales
+        #   - Cache parent module kwargs for replaying forward passes
         self._setup_activation_cache_hooks()
 
     def on_event(self, state: State, event: Event, **kwargs):
@@ -267,13 +295,20 @@ class AWQModifier(Modifier, QuantizationMixin):
 
         self.ended_ = True
 
-        for _, module in tqdm(
-            match_named_modules(state.model, self.targets, self.ignore),
-            desc="Calibrating weights",
-        ):
-            update_weight_zp_scale(module)
+        if not self.smooth_only:
+            # Only perform quantization if not in smooth_only mode
+            for _, module in tqdm(
+                match_named_modules(state.model, self.targets, self.ignore),
+                desc="Calibrating weights",
+            ):
+                update_weight_zp_scale(module)
 
-        QuantizationMixin.end_calibration(self, state.model)
+            QuantizationMixin.end_calibration(self, state.model)
+        else:
+            logger.info(
+                "AWQ smooth_only mode: Smoothing applied, skipping quantization. "
+                "Model weights remain in original precision."
+            )
 
         # remove activation hooks
         self.remove_hooks()
